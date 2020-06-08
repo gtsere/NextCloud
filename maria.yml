@@ -1,0 +1,39 @@
+version: "3.7"
+ 
+services:
+  mariadb:
+    image: mariadb:latest
+    volumes:
+      - /mnt/mariadata:/var/lib/mysql
+    secrets:
+      - wp_db_password
+      - mysql_root_password
+    environment:
+      - MYSQL_USER=testuser
+      - MYSQL_DATABASE=testdb
+      - MYSQL_PASSWORD_FILE=/run/secrets/wp_db_password
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql_root_password
+    networks:
+      - private
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      replicas: 1
+      update_config:
+        parallelism: 2
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=false"
+secrets:
+  wp_db_password:
+    external: true
+  mysql_root_password:
+    external: true 
+volumes:
+  mariadata:
+    driver: "local" 
+networks:
+  private:
+    external: false

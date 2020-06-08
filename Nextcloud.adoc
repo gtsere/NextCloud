@@ -1,0 +1,334 @@
+== Nextcloud
+
+ Θεόδωρος Αλεξανδρής <cs151047@uniwa.gr>
+ 
+ Νικόλαος Αντωνόπουλος <c161047@uniwa.gr>
+  
+ Γεώργιος Τσερεγκούνης <cs151056@uniwa.gr>
+
+ 
+:numbered:
+
+== Περιγραφή του Project
+Η εργασία μας περιγράφει και δημιουργεί μια εφαρμογή Cloud και πιο συγκεκριμένα την υπηρεσία Nextcloud 18.0.1 σε Docker Swarm. Η υπηρεσία προσφέρει στους χρήστες της αποθηκευτικό χώρο στο σύννεφο με δυνατότητα χρήσης φακέλων και αρχείων. Επιπλέoν παρέχει στον/στους διαχειριστές δυνατότητα ελέγχου των χρηστών καθώς και του αποθηκευτικού χώρου που έχει στην διάθεσή του ο καθένας.
+
+== Docker Swarm Cluster:
+
+Αρχικά αρχικοποιούμε τον docker swarm cluster με την εντολή docker swarm init. 
+[source,bash]
+--
+docker swarm init
+--
+
+[source,output]
+--
+Swarm initialized: current node (ka3fjuh0rn4bmxg8a6r7ojz0x) is now a manager.
+
+To add a worker to this swarm, run the following command:
+	docker swarm join --token SWMTKN-1-0yyxlct9kcvx8uqqp1fsboqid39qeqbi2o051mxhfyagg3j3ql-duzlbng4ofqb6b0yh2d6qg2jm 192.168.2.8:2377
+To add a manager to this swarm, run 'docker swarm join-token manager' and follow the instructions.
+--
+
+Η εντολή αυτή θα κάνει το συγκεκριμένο node – στο οποίο εκτελείται – Master και θα εμφανιστεί στην οθόνη το αντίστοιχο μήνυμα επιβεβαίωσης, όπως και την εντολή docker swarm join με τις κατάλληλες παραμέτρους, η οποία θα εκτελεστεί από τα άλλα nodes για να ενταχούν σαν workers στο συγκεκριμένο swarm.
+Έπειτα, εγκαθιστούμε τον GlusterFS σε κάθε node και ως manager εκτελούμε την εντολή peer probe για κάθε worker workers του.
+
+[source,bash]
+--
+sudo gluster peer probe node1 
+peer probe: success
+--
+
+
+Εάν γίνει επιτυχώς αυτό το βήμα, θα πρέπει να εμφανίζονται τα ονόματά τους στο pool list, με την εντολή:
+[source,bash]
+--
+sudo gluster pool list
+-- 
+ 
+  
+Στη συνέχεια, δημιουργούμε τους φακέλους αρχείων όπου ο GlusterFS θα αποθηκεύει τα δεδομένα για τα bricks που θα προσδιορίσουμε τη στιγμή που φτιάξουμε το volume. Οπότε, φτιάχνουμε και ένα 3 way replicated GlusterFS volume, το οποίο επιτρέπει ουσιαστικά στον manager να εκκινήσει το volume και να έχει πρόσβαση στα δεδομένα που ορίσαμε πριν. 
+[source,bash]
+--
+sudo mkdir -p /gluster/brick
+sudo gluster volume create swarm-gfs replica 2 manager:/gluster/brick node1:/gluster/brick force
+
+output: volume create: swarm-gfs: success: please start the volume to access data
+-- 
+Οπότε, εκκινούμε το GlusterFS Volume ως manager και σε περίπτωση που επιθυμούμε να το επαληθεύσουμε, εκτελούμε την εντολή:
+[source,bash]
+--
+sudo gluster volume info
+-- 
+
+Τέλος, με τις παρακάτω εντολές, κάνουμε mount το GlusterFS Volume σε κάνε node μέσα στο σμήνος μας και αυτό μας δίνει το προτέρημα ότι κάθε φορά που θα δημιουργείται ένα αρχείο στον κατάλογο /mnt/partition, τα δεδομένα θα αντιγράφονται και στα υπόλοιπα Nodes (δηλαδή τους workers).
+[source,bash]
+--
+sudo umount /mnt
+sudo chown -R username /etc/fstab /mnt
+sudo chown -R username /mnt 
+sudo echo 'localhost:/swarm-gfs /mnt glusterfs defaults,_netdev,backupvolfile-server=localhost 0 0' >> /etc/fstab 
+sudo mount.glusterfs localhost:/swarm-gfs /mnt 
+sudo chown -R username:docker /mnt
+--
+
+== Traefik:
+
+Αφού λοιπόν έχουμε δημιουργήσει τον Cluster, θα χρειαστεί να  παραμετροιποιήσουμε τον Traefik proxy. 
+Αρχικά, “φτιάχνουμε” ένα κρυπτογραφημένο κωδικό για να αποκτήσουμε πρόσβαση στο dashboard του Traefik με ασφάλεια.
+Χρησιμοποιούμε την εντολή htpasswd, η οποία βρίσκεται στο package apache2-utils (σε περίπτωση που δεν το έχουμε, το εγκαθιστούμε). Χρησιμοποιώντας την εντολή htpasswd -nb admin ‘my_pass’ και αλλάζοντας το ‘my_pass’ στον κωδικό που θέλουμε να ορίσουμε, θα έχουμε ένα αποτέλεσμα συγκεκριμένο τυπωμένο στην οθόνη, της μορφής: admin:$apr1$…. Προς το παρόν αποθηκεύουμε το αποτέλεσμα αυτό σε ένα ξεχωριστό αρχείο, διότι θα το χρησιμοποιήσουμε αργότερα στο configuration αρχείο του Traefik.
+
+[source,bash]
+--
+sudo apt-get install apache2-utils
+htpasswd -nb admin secure_password
+
+Output:
+admin:$apr1$/RhNAq/6$9Lh.isfKrOwKMfxliqrdD/
+--
+Συνεχίζοντας, δημιουργούμε ένα δίκτυο για το Traefik proxy, το οποίο θα μπορούμε να το μοιραστούμε και με την υπόλοιπη στοίβα ή τα containers.
+[source,bash]
+--
+sudo docker network create proxy
+--
+
+Φτιάχνουμε ένα φάκελο μέσα στον υπάρχων /opt και μέσα σε αυτόν δημιουργούμε δυο αρχεία (acme.json και traefik.yml) – σημαντικό σε αυτό το σημείο είναι να αναφέρουμε ότι πρέπει να δώσουμε δικαιώματα read και write μόνο στον δημιουργό του αρχείου acme.json. 
+[source,bash]
+--
+sudo touch acme.json
+sudo touch traefik.yml
+sudo chmod 600 acme.json
+--
+
+Στο αρχείο traefik.yml τοποθετούμε τα εξής:
+[source,bash]
+--
+version: "3.7"
+
+services:
+traefik:
+  image: traefik:v2.0
+  command:
+    - "--api=true"
+    - "--api.dashboard=true"
+    - "--providers.docker=true"
+    - "--providers.docker.exposedbydefault=false"
+    - "--providers.docker.swarmMode=true"
+    - "--providers.docker.network=http"
+    - "--entrypoints.web.address=:80"
+    - "--entrypoints.websecure.address=:443"
+    - "--certificatesresolvers.default.acme.email=your email address"
+    - "--certificatesresolvers.default.acme.storage=/acme.json"
+    - "--certificatesresolvers.default.acme.tlschallenge=true"
+  ports:
+    - 80:80
+    - 443:443
+  deploy:
+    placement:
+      constraints:
+        - node.role == manager
+    replicas: 1
+    update_config:
+    parallelism: 2
+    delay: 10s
+    restart_policy:
+      condition: on-failure
+    labels:
+      # Dashboard
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.example.com`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.tls.certresolver=default"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.middlewares=authtraefik"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=admin:$apr1$/RhNAq/6$9Lh.isfKrOwKMfxliqrdD/"
+      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+
+      # global redirect to https
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      
+      # middleware redirect
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    - ./acme.json:/etc/traefik/acme.json
+  networks:
+    - proxy
+
+networks:
+  proxy:
+  external: true
+--
+
+Έπειτα, κάνουμε deploy το αρχείο yml που φτιάξαμε με την παρακάτω εντολή, δίνοντας στην εφαρμογή το όνομα που θέλουμε. 
+[source,bash]
+--
+docker stack deploy --compose-file traefik.yml proxy
+--
+
+Μπορούμε να ελέγξουμε την κατάσταση του stack με τις εντολές:
+[source,bash]
+--
+docker stack ps <service-name>
+docker service logs <service-name>
+--
+
+Τέλος, μπορούμε να αποκτήσουμε πρόσβαση στο dashboard μέσω του link traefik.example.com. 
+Αρχικά πρέπει να τοποθετήσουμε τις κατάλληλες παραμέτρους στο αρχείο hosts του φακέλου /etc/.
+[source,hosts]
+--
+ip traefik.example.com
+--
+
+Βάζουμε τα στοιχεία (username, password) στα πεδία, έτσι όπως τα ορίσαμε και αφού μετατρέψει τη σύνδεσή μας σε https,“Ασφαλής Σύνδεση” - μέσω του πιστοποιητικού Letsencrypt, του οποίου οι πληροφορίες αποθηκεύονται στο acme.json αρχείο - μπορούμε να περιηγηθούμε μέσα στο dashboard.
+image:./images/Traefik.jpg[
+"Traefik",width=800,
+link="./images/Traefik.jpg"]
+
+== MariaDB:
+
+Στο σημείο αυτό, θα πρέπει να κάνουμε deploy την υπηρεσία που θα φιλοξενεί την MariaDB μέσα στο cluster του σμήνους μας. Η MariaDB είναι φτιαγμένη από τους ίδιους τους developers της MySQL και πρόκειται για έναν από τους δημοφιλέστερους servers βάσεων δεδομένων στον κόσμο. 
+
+Αρχικά, θα πρέπει να ασφαλίσουμε το περιβάλλον του MariaDB, με τη δημιουργία password, το οποίο γίνεται με διάφορους τρόπους. Χρησιμοποιούμε, όμως, τη μέθοδο Docker Secrets και αποθηκεύουμε τους κωδικούς σε 2 αρχεία, το wp_db_password και το mysql_root_password. Αμέσως μετά, δημιουργούμε το δίκτυο του docker, με σκοπό να δεσμεύσουμε το MariaDB με τα Application Containers και δημιουργούμε και έναν φάκελο mariadata μέσα στο directory /mnt.
+(Δείτε το αρχείο install.adoc για λεπτομέρειες.)
+
+
+Έπειτα, στο φάκελο /opt δημιουργούμε έναν υποφάκελο maria για να τοποθετήσουμε το configuration αρχείο (δηλαδή το maria.yml).  
+[source,maria.yml]
+--
+version: "3.7"
+ 
+services:
+  mariadb:
+    image: mariadb:latest
+    volumes:
+      - /mnt/mariadata:/var/lib/mysql
+    secrets:
+      - wp_db_password
+      - mysql_root_password
+    environment:
+      - MYSQL_USER=testuser
+      - MYSQL_DATABASE=testdb
+      - MYSQL_PASSWORD_FILE=/run/secrets/wp_db_password
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql_root_password
+    networks:
+      - private
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+      replicas: 1
+      update_config:
+        parallelism: 2
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=false"
+secrets:
+  wp_db_password:
+    external: true
+  mysql_root_password:
+    external: true 
+volumes:
+  mariadata:
+    driver: "local" 
+networks:
+  private:
+    external: false
+--
+
+
+Στη συνέχεια, εκτελούμε την παρακάτω εντολή για να γίνει deploy το yml αρχείο και αντίστοιχα να δώσουμε και ένα όνομα που θέλουμε στο stack (π.χ. maria).
+[source,bash]
+--
+docker stack deploy --compose-file maria.yml maria
+--
+
+Σε περίπτωση που θέλουμε να ελέγξουμε την κατάσταση του stack, χρησιμοποιούμε τις εντολές που έχουν αναφερθεί πιο πάνω.
+
+
+
+
+
+
+== DEPLOYING NEXTCLOUD:
+
+Αυτό θα είναι και το τελευταίο βήμα, όπου θα κάνουμε deploy το Nexcloud (έκδοση 18.0.1) στο Docker Swarm Cluster.
+Αρχικά, για την προετοιμασία του περιβάλλοντος του nextcloud, θα δημιουργήσουμε 4 υποφακέλους στον φάκελο /mnt, με ονόματα nextcloud, nextapps, nextdata, nextconfig και στον φάκελο /opt θα φτιάξω έναν ακόμα υποφάκελο με όνομα nextcloud για να βάλω μέσα το configuration αρχείο, δηλαδή το next.yml.
+Στη συνέχεια, κατασκευάζουμε το yml αρχείο και όπως φαίνεται, χρησιμοποιούμε και το MariaDB ως back end storage system για το nextcloud. Το αρχείο αυτό, περιέχει την πόρτα αλλά και διάφορα links εκ των οποίων το ένα χρησιμοποιείται για την πρόσβαση στην ιστοσελίδα.
+[source,next.yml]
+--
+version: "3.7"
+ 
+services:
+  nextcloud:
+    image: nextcloud:latest
+    depends_on:
+      - maindb
+    secrets:
+      - mysql_root_password
+    environment:
+      - MYSQL_HOST=maindb:3306
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=root
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql_root_password
+    volumes:
+      - /mnt/nextcloud:/var/www/html:cached
+      - /mnt/nextapps:/var/www/html/custom_apps:cached
+      - /mnt/nextdata:/var/www/html/data:cached
+      - /mnt/nextconfig:/var/www/html/config:cached
+    networks:
+      - proxy
+      - private
+    deploy:
+      placement:
+        constraints: [node.role == worker]
+      replicas: 1
+      update_config:
+        parallelism: 2
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=proxy"
+        - "traefik.http.routers.nextcloud.rule=Host(`next.example.com`)"
+        - "traefik.http.routers.nextcloud.tls=true"
+        - "traefik.http.routers.nextcloud.tls.certresolver=default"
+        - "traefik.http.routers.nextcloud.entrypoints=websecure"
+        - "traefik.http.services.nextcloud.loadbalancer.server.port=80"
+secrets:
+  mysql_root_password:
+    external: true 
+volumes:
+  nextcloud:
+    driver: "local"
+  nextapps:
+    driver: "local"
+  nextdata:
+    driver: "local"
+  nextconfig:
+    driver: "local"
+networks:
+  proxy:
+    external: true
+  private:
+    external: true
+--
+
+Έπειτα, εκτελούμε την αντίστοιχη εντολή για να γίνει Deploy το αρχείο που επεξεργαστήκαμε πριν, ενώ όπως και στα άλλα stacks, έτσι και σε αυτό μπορούμε να ελέγξουμε την κατάστασή του με την εντολή docker stack ps και το όνομα που δώσαμε.
+[source,bash]
+--
+docker stack deploy --compose-file next.yml next
+--
+Τέλος, ανοίγουμε ένα browser και περιηγούμαστε στο link του nextcloud (το οποίο γράψαμε μέσα στο configuration αρχείο του) αφού κάνουμε τις κατάλληλες παραμετροποιήσεις στο αρχείο /etc/hosts. Με την πρώτη φορά που θα το κάνουμε αυτό, θα μας ζητηθεί να φτιάξουμε ένα λογαριασμό Admin, γράφοντας το username και το password. Από κάτω, πατώντας το “Storage & database” μας βγάζει ένα path που βρίσκονται τα δεδομένα και πιο κάτω μπορούμε να επιλέξουμε το configure της βάσης δεδομένων μας. Επιλέγουμε το MariaDB, πληκτρολογούμε όνομα χρήστη, κωδικό, όνομα και πόρτα και αφού επιλέξουμε το “Install recommended apps”, ξεκινάει η διαδικασία της εγκατάστασης. Αυτό μπορεί να πάρει και πάνω από 10 λεπτά, αλλά όταν ολοκληρωθεί, θα μας εμφανιστεί ένα interface που θα μας καλωσορίζει στην ιστοσελίδα. Άρα, το nextcloud είναι πλέον έτοιμο και εάν θέλουμε μπορούμε να το τροποποιήσουμε.
+image:./images/Nextcloud-Login.jpg[
+"Nextcloud-Login",width=800,
+link="./images/Nextcloud-Login.jpg"]
+
+image:./images/Nextcloud-Dash.jpg[
+"Nextcloud-Dash",width=800,
+link="./images/Nextcloud-Dash.jpg"]

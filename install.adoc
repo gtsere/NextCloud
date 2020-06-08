@@ -1,0 +1,112 @@
+== Install
+
+Για την εγκατάσταση και την εκτέλεση της υπηρεσίας είναι απαραίτητη η δημιουργία docker-swarm.
+Αφού είναι έτοιμο το docker-swarm, εκτελούμε τα ακόλουθα με την σειρά
+
+
+:numbered:
+
+== Εγκατάσταση GlusterFS για κάθε node
+[source,bash]
+--
+	#sudo apt install glusterfs-server glusterfs-client -y && sudo systemctl enable glusterfs-server
+	#sudo gluster peer probe node1
+	#sudo gluster peer probe node2
+--
+Με την εκτέλεση της ακόλουθης εντολής θα πρέπει να βλέπουμε και τα 3 nodes
+[source,bash]
+--
+	#sudo gluster pool list
+--
+Δημιουργούμε το directory που θα αποθηκεύει το GlusterFS τα δεδομένα του σε κάθε κόμβο με την εντολή
+[source,bash]
+--
+	#sudo mkdir -p /gluster/brick
+--
+Τρέχουμε από τον manager την ακόλουθη εντολή
+[source,bash]
+--
+	#sudo gluster volume create swarm-gfs replica 3 \ manager:/gluster/brick \ node1:/gluster/brick \ node2:/gluster/brick \ force
+--
+Ξεκινάμε το GlusterFS από τον manager
+[source,bash]
+--
+	#sudo gluster volume start swarm-gfs
+--
+Και κάνουμε mount τα GlusterFS Volumes για κάθε Node
+[source,bash]
+--
+	#sudo umount /mnt
+	#sudo chown -R username /etc/fstab /mnt
+	#sudo chown -R username /mnt
+	#sudo echo 'localhost:/swarm-gfs /mnt glusterfs defaults,_netdev,backupvolfile-server=localhost 0 0' >> /etc/fstab
+	#sudo mount.glusterfs localhost:/swarm-gfs /mnt
+	#sudo chown -R username:docker /mnt
+--
+== Εγκατάσταση του Traefik 2.0
+Δημιουργούμε ένα hash με τον επιθυμητό κωδικό για τον admin και το αποθηκεύουμε
+[source,bash]
+--
+	#sudo apt-get install apache2-utils
+	#htpasswd -nb admin your_password
+--
+Δημιουργία απαραίτητων αρχείων και εγκατάσταση
+[source,bash]
+--
+	#sudo docker network create proxy
+	#cd /opt
+	#sudo mkdir -p traefik
+	#cd traefik       //Εδώ θα πρέπει να τοποθετήσουμε το yml του traefik
+	#sudo touch acme.json
+	#sudo touch traefik.yml
+	#sudo chmod 600 acme.json
+--
+Τρέχουμε το yml αρχείο
+[source,bash]
+--
+	#docker stack deploy --compose-file traefik.yml proxy
+--
+== Εγκατάσταση MariaDB
+Δημιουργία σετ κωδικών για την βάση δεδομένων
+[source,bash]
+--
+	#wp_db_password=$(od -vN 32 -An -tx1 /dev/urandom | tr -d ' \n' ; echo)
+	#mysql_root_password=$(od -vN 32 -An -tx1 /dev/urandom | tr -d ' \n' ; echo)
+	#echo $wp_db_password > wp_db_password
+	#echo $mysql_root_password > mysql_root_password
+	#echo $wp_db_password | docker secret create wp_db_password -
+	#echo $mysql_root_password | docker secret create mysql_root_password -
+--
+Δημιουργία φακέλων
+[source,bash]
+--
+    #docker network create --bridge private
+	#cd /mnt
+	#sudo mkdir -p mariadata
+	#cd /opt
+	#sudo mkdir -p maria
+	#cd maria      //Εδώ θα πρέπει να τοποθετήσουμε το yml του mariadb
+--
+Τρέχουμε το yaml
+[source,bash]
+--
+    #docker stack deploy --compose-file maria.yml maria
+--
+== Εγκατάσταση Nextcloud
+Δημιουργούμε τους απαραίτητους φάκελους
+[source,bash]
+--
+	#cd /mnt
+	#sudo mkdir -p nextcloud
+	#sudo mkdir -p nextapps
+	#sudo mkdir -p nextdata
+	#sudo mkdir -p nextconfig
+	#cd /opt
+	#sudo mkdir -p nextcloud
+	#cd nextcloud    //Εδώ θα πρέπει να τοποθετήσουμε το yml του nextcloud
+--
+Εκτελούμε το yaml και η υπηρεσία είναι έτοιμη
+[source,bash]
+--
+    #docker stack deploy --compose-file next.yml next
+--
